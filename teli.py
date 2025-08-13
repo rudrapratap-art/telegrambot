@@ -1,52 +1,63 @@
 import os
+import tempfile
 import subprocess
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-  # Replace with your bot token
-COOKIES_FILE = "cookies.txt"
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot Token from environment
+IG_COOKIES = os.getenv("IG_COOKIES")  # Instagram cookies.txt content from environment
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN is not set in environment variables")
+if not IG_COOKIES:
+    raise ValueError("❌ IG_COOKIES is not set in environment variables")
+
+# Save cookies to a temporary file
+def save_cookies():
+    cookies_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+    cookies_file.write(IG_COOKIES.encode())
+    cookies_file.close()
+    return cookies_file.name
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📥 Send me an Instagram reel link and I’ll get you the download link.")
+    await update.message.reply_text("📥 Send me any Instagram Reel link and I'll give you a direct download link.")
 
-async def download_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-
-    if "instagram.com" not in url:
-        await update.message.reply_text("❌ Please send a valid Instagram link.")
+    if "instagram.com/reel" not in url:
+        await update.message.reply_text("❌ Please send a valid Instagram Reel link.")
         return
 
-    await update.message.reply_text("⏳ Fetching download link... please wait.")
+    await update.message.reply_text("⏳ Downloading your reel... please wait.")
 
+    cookies_path = save_cookies()
     try:
-        # Run yt-dlp to get direct video link
-        cmd = [
-            "yt-dlp",
-            "--cookies", COOKIES_FILE,
-            "-g",  # Get direct link
-            "-f", "mp4",
-            url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # Run yt-dlp to get direct link (no full file download)
+        result = subprocess.run(
+            ["yt-dlp", "--cookies", cookies_path, "-g", url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+        )
 
-        if result.returncode == 0:
-            download_link = result.stdout.strip()
-            await update.message.reply_text(f"✅ Download Link:\n{download_link}")
+        if result.returncode == 0 and result.stdout.strip():
+            download_url = result.stdout.strip().split("\n")[0]
+            await update.message.reply_text(f"✅ Here is your download link:\n{download_url}")
         else:
-            await update.message.reply_text(f"❌ yt-dlp error:\n{result.stderr}")
-
+            await update.message.reply_text("❌ Failed to fetch reel. It may be private or restricted.")
     except subprocess.TimeoutExpired:
-        await update.message.reply_text("❌ Error: Timed out while fetching the link.")
+        await update.message.reply_text("❌ Timed out while processing the reel.")
+    finally:
+        os.remove(cookies_path)
 
-if __name__ == "__main__":
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_instagram))
-
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
     print("🚀 Bot is running...")
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
 
 
 
