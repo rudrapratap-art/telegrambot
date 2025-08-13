@@ -1,62 +1,74 @@
 import os
-import tempfile
 import subprocess
+import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot Token from environment
-IG_COOKIES = os.getenv("IG_COOKIES")  # Instagram cookies.txt content from environment
+# ==============================
+# CONFIG
+# ==============================
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Set in Render Dashboard
+COOKIES_FILE_PATH = "cookies.txt"  # Must be in the same folder as this script
 
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is not set in environment variables")
-if not IG_COOKIES:
-    raise ValueError("❌ IG_COOKIES is not set in environment variables")
+logging.basicConfig(level=logging.INFO)
 
-# Save cookies to a temporary file
-def save_cookies():
-    cookies_file = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-    cookies_file.write(IG_COOKIES.encode())
-    cookies_file.close()
-    return cookies_file.name
-
+# ==============================
+# Start Command
+# ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📥 Send me any Instagram Reel link and I'll give you a direct download link.")
+    await update.message.reply_text("📥 Send me an Instagram Reel link, and I'll fetch the download link for you!")
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==============================
+# Handle Instagram Link
+# ==============================
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    if "instagram.com/reel" not in url:
-        await update.message.reply_text("❌ Please send a valid Instagram Reel link.")
+    if "instagram.com" not in url:
+        await update.message.reply_text("❌ Please send a valid Instagram link.")
         return
 
-    await update.message.reply_text("⏳ Downloading your reel... please wait.")
+    await update.message.reply_text("⏳ Downloading your video... please wait.")
 
-    cookies_path = save_cookies()
     try:
-        # Run yt-dlp to get direct link (no full file download)
-        result = subprocess.run(
-            ["yt-dlp", "--cookies", cookies_path, "-g", url],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
-        )
+        # Run yt-dlp to get direct download link using cookies.txt
+        cmd = [
+            "yt-dlp",
+            "--cookies", COOKIES_FILE_PATH,
+            "-g", url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-        if result.returncode == 0 and result.stdout.strip():
-            download_url = result.stdout.strip().split("\n")[0]
-            await update.message.reply_text(f"✅ Here is your download link:\n{download_url}")
-        else:
-            await update.message.reply_text("❌ Failed to fetch reel. It may be private or restricted.")
+        if result.returncode != 0:
+            logging.error(result.stderr)
+            await update.message.reply_text(f"❌ yt-dlp error:\n{result.stderr}")
+            return
+
+        direct_link = result.stdout.strip()
+
+        if not direct_link:
+            await update.message.reply_text("❌ Could not get download link. Maybe the reel is private or age-restricted.")
+            return
+
+        await update.message.reply_text(f"✅ Here’s your download link:\n{direct_link}")
+
     except subprocess.TimeoutExpired:
-        await update.message.reply_text("❌ Timed out while processing the reel.")
-    finally:
-        os.remove(cookies_path)
+        await update.message.reply_text("❌ Error: Download process timed out.")
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# ==============================
+# Main
+# ==============================
+if __name__ == "__main__":
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ TELEGRAM_BOT_TOKEN is not set!")
+        exit(1)
+
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
     print("🚀 Bot is running...")
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
 
 
 
