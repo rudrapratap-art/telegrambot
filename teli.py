@@ -1,47 +1,52 @@
 import os
-import telebot
-import yt_dlp
-import tempfile
-import shutil
+import subprocess
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Get Bot Token from environment variable
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is not set in environment variables!")
+  # Replace with your bot token
+COOKIES_FILE = "cookies.txt"
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📥 Send me an Instagram reel link and I’ll get you the download link.")
 
-# Handle /start command
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "👋 Hi! Send me an Instagram reel link and I'll download it for you!")
+async def download_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
 
-# Handle incoming Instagram URLs
-@bot.message_handler(func=lambda message: "instagram.com" in message.text.lower())
-def download_instagram(message):
-    url = message.text.strip()
-    bot.reply_to(message, "⏳ Downloading your video... please wait!")
+    if "instagram.com" not in url:
+        await update.message.reply_text("❌ Please send a valid Instagram link.")
+        return
+
+    await update.message.reply_text("⏳ Fetching download link... please wait.")
 
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_file = os.path.join(tmpdir, "video.mp4")
+        # Run yt-dlp to get direct video link
+        cmd = [
+            "yt-dlp",
+            "--cookies", COOKIES_FILE,
+            "-g",  # Get direct link
+            "-f", "mp4",
+            url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-            ydl_opts = {
-                'outtmpl': output_file,
-                'format': 'best',
-                'cookiesfrombrowser': ('chrome',),  # Will only work if cookies are available (Render won't have them for 18+)
-            }
+        if result.returncode == 0:
+            download_link = result.stdout.strip()
+            await update.message.reply_text(f"✅ Download Link:\n{download_link}")
+        else:
+            await update.message.reply_text(f"❌ yt-dlp error:\n{result.stderr}")
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+    except subprocess.TimeoutExpired:
+        await update.message.reply_text("❌ Error: Timed out while fetching the link.")
 
-            bot.send_video(message.chat.id, open(output_file, 'rb'))
-
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error: {e}")
-
-# Run bot
 if __name__ == "__main__":
-    print("🚀 Bot is running on Render...")
-    bot.infinity_polling(timeout=60, long_polling_timeout=30)
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_instagram))
+
+    print("🚀 Bot is running...")
+    app.run_polling()
+
+
 
